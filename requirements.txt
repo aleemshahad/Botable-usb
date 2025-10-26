@@ -1,0 +1,31 @@
+# Python Requirements for Bootable USB Creator
+# This application uses only Python standard library modules
+# No additional Python packages need to be installed via pip
+
+# Standard library modules used:
+# - tkinter (GUI framework)
+# - subprocess (system command execution)
+# - json (parsing lsblk output)
+# - threading (async USB creation)
+# - pathlib (file path handling)
+# - os, sys (system operations)
+
+# System dependencies (install via package manager):
+# Ubuntu/Debian:
+#   sudo apt install python3-tk parted dosfstools rsync util-linux
+#
+# Fedora:
+#   sudo dnf install python3-tkinter parted dosfstools rsync util-linux
+#
+# Arch Linux:
+#   sudo pacman -S tk parted dosfstools rsync util-linux
+
+# Optional system dependencies for additional features:
+# Ubuntu/Debian:
+#   sudo apt install ntfs-3g exfat-utils grub2-common
+#
+# Fedora:
+#   sudo dnf install ntfs-3g exfat-utils grub2-tools
+#
+# Arch Linux:
+#   sudo pacman -S ntfs-3g exfat-utils grub
