@@ -259,6 +259,15 @@ class BootableUSBCreator:
         if filename:
             self.selected_iso.set(filename)
             self.log(f"Selected ISO: {filename}")
+            
+            # Auto-generate volume label from ISO filename
+            iso_name = Path(filename).stem  # Get filename without extension
+            # Clean up the name: uppercase, replace spaces/special chars with underscore
+            clean_label = ''.join(c if c.isalnum() else '_' for c in iso_name).upper()
+            # Limit to 11 characters for FAT32 compatibility
+            clean_label = clean_label[:11]
+            self.volume_label.set(clean_label)
+            self.log(f"Auto-generated volume label: {clean_label}")
     
     def refresh_devices(self):
         """Refresh the list of available USB devices"""
@@ -536,13 +545,32 @@ class BootableUSBCreator:
             
             # Wait for partition to be recognized
             self.log("Waiting for partition to be recognized...")
-            subprocess.run(['sudo', 'partprobe', device], capture_output=True)
+            result = subprocess.run(['sudo', 'partprobe', device], capture_output=True, text=True)
+            if result.returncode != 0:
+                self.log(f"partprobe warning: {result.stderr}", "WARNING")
             import time
-            time.sleep(2)
-            self.update_progress(20, "Step 3/6: Complete")
+            time.sleep(3)  # Increased wait time for Ubuntu
             
-            # Determine partition name
-            partition = f"{device}1" if not device.endswith(('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')) else f"{device}p1"
+            # Determine partition name (handle different device types)
+            # NVMe devices: /dev/nvme0n1 -> /dev/nvme0n1p1
+            # MMC/SD cards: /dev/mmcblk0 -> /dev/mmcblk0p1
+            # Regular USB: /dev/sdb -> /dev/sdb1
+            if 'nvme' in device or 'mmcblk' in device or 'loop' in device:
+                partition = f"{device}p1"
+            else:
+                partition = f"{device}1"
+            
+            # Verify partition exists (retry up to 5 times)
+            for retry in range(5):
+                if os.path.exists(partition):
+                    self.log(f"Partition {partition} detected")
+                    break
+                self.log(f"Waiting for partition {partition} (attempt {retry + 1}/5)...")
+                time.sleep(1)
+            else:
+                raise Exception(f"Partition {partition} not found after creation. Device may need manual intervention.")
+            
+            self.update_progress(20, "Step 3/6: Complete")
             
             # Step 4: Format partition (20-30%)
             self.update_progress(20, "Step 4/6: Formatting partition...")
@@ -563,8 +591,10 @@ class BootableUSBCreator:
                 ):
                     raise Exception("Failed to format partition")
             elif fs == "exFAT":
+                # Try mkfs.exfat first (exfatprogs), fall back to mkexfatfs (exfat-utils)
+                exfat_cmd = 'mkfs.exfat' if subprocess.run(['which', 'mkfs.exfat'], capture_output=True).returncode == 0 else 'mkexfatfs'
                 if not self.run_command(
-                    ['sudo', 'mkfs.exfat', '-n', label, partition],
+                    ['sudo', exfat_cmd, '-n', label, partition],
                     f"Formatting as exFAT..."
                 ):
                     raise Exception("Failed to format partition")
@@ -588,14 +618,17 @@ class BootableUSBCreator:
                     ['sudo', 'mount', '-o', 'loop', self.selected_iso.get(), iso_mount],
                     "Mounting ISO file..."
                 ):
-                    raise Exception("Failed to mount ISO")
+                    raise Exception(f"Failed to mount ISO: {self.selected_iso.get()}")
+                
+                # Wait a moment before mounting USB
+                time.sleep(1)
                 
                 # Mount USB
                 if not self.run_command(
                     ['sudo', 'mount', partition, usb_mount],
                     "Mounting USB partition..."
                 ):
-                    raise Exception("Failed to mount USB partition")
+                    raise Exception(f"Failed to mount USB partition: {partition}. Ensure partition was formatted correctly.")
                 
                 # Copy files with progress tracking
                 self.log("Copying files (this may take several minutes)...")
@@ -603,10 +636,18 @@ class BootableUSBCreator:
                     raise Exception("Failed to copy files")
                 
             finally:
-                # Unmount
+                # Unmount with retries
                 self.log("Unmounting filesystems...")
-                subprocess.run(['sudo', 'umount', iso_mount], capture_output=True, check=False)
-                subprocess.run(['sudo', 'umount', usb_mount], capture_output=True, check=False)
+                for _ in range(3):
+                    result = subprocess.run(['sudo', 'umount', iso_mount], capture_output=True, check=False)
+                    if result.returncode == 0:
+                        break
+                    time.sleep(1)
+                for _ in range(3):
+                    result = subprocess.run(['sudo', 'umount', usb_mount], capture_output=True, check=False)
+                    if result.returncode == 0:
+                        break
+                    time.sleep(1)
             
             # Step 6: Install bootloader (90-95%)
             self.update_progress(90, "Step 6/6: Installing bootloader...")
@@ -660,7 +701,7 @@ class BootableUSBCreator:
 
 def check_dependencies():
     """Check if required system tools are available"""
-    required_tools = ['lsblk', 'parted', 'mkfs.vfat', 'rsync', 'wipefs']
+    required_tools = ['lsblk', 'parted', 'mkfs.vfat', 'rsync', 'wipefs', 'partprobe']
     optional_tools = ['mkfs.ntfs', 'mkfs.exfat', 'grub-install']
     
     missing_required = []
@@ -687,9 +728,9 @@ def check_dependencies():
         print("WARNING: Missing optional tools (some features may not work):")
         print("  " + ", ".join(missing_optional))
         print("\nTo enable all features, install:")
-        print("  Ubuntu/Debian: sudo apt install ntfs-3g exfat-utils grub2-common")
-        print("  Fedora: sudo dnf install ntfs-3g exfat-utils grub2-tools")
-        print("  Arch: sudo pacman -S ntfs-3g exfat-utils grub")
+        print("  Ubuntu/Debian: sudo apt install ntfs-3g exfatprogs grub2-common")
+        print("  Fedora: sudo dnf install ntfs-3g exfatprogs grub2-tools")
+        print("  Arch: sudo pacman -S ntfs-3g exfatprogs grub")
         print()
     
     return True

@@ -10,11 +10,16 @@ Install required system tools:
 # Ubuntu/Debian
 sudo apt install python3-tk parted dosfstools rsync util-linux
 
+# Optional (for NTFS and exFAT support):
+sudo apt install ntfs-3g exfatprogs grub2-common
+
 # Fedora
 sudo dnf install python3-tkinter parted dosfstools rsync util-linux
+sudo dnf install ntfs-3g exfatprogs grub2-tools  # Optional
 
 # Arch Linux
 sudo pacman -S tk parted dosfstools rsync util-linux
+sudo pacman -S ntfs-3g exfatprogs grub  # Optional
 ```
 
 ## Steps
