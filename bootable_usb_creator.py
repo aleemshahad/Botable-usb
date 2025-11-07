@@ -470,6 +470,8 @@ class BootableUSBCreator:
             return
         
         # Start creation in a separate thread
+        self.log("Starting creation thread...", "INFO")
+        self.log(f"Selected device: {device}", "INFO")
         self.is_creating = True
         self.create_btn.config(state='disabled')
         self.reset_progress()
@@ -477,12 +479,14 @@ class BootableUSBCreator:
         thread = threading.Thread(target=self._create_bootable_usb_thread, args=(device,))
         thread.daemon = True
         thread.start()
+        self.log("Thread started!", "INFO")
     
     def _create_bootable_usb_thread(self, device: str):
         """Thread function for creating bootable USB"""
         try:
             self.log("=" * 50, "INFO")
             self.log("Starting bootable USB creation process...", "INFO")
+            self.log(f"Target device: {device}", "INFO")
             self.log("=" * 50, "INFO")
             
             # Step 1: Unmount device (0-5%)
@@ -531,9 +535,12 @@ class BootableUSBCreator:
                 ):
                     raise Exception("Failed to create MBR partition table")
                 
+                # Determine filesystem type for partition creation
+                part_fs_type = 'ntfs' if self.file_system.get() == 'NTFS' else 'fat32'
+                
                 if not self.run_command(
-                    ['sudo', 'parted', '-s', device, 'mkpart', 'primary', 'fat32', '1MiB', '100%'],
-                    "Creating partition..."
+                    ['sudo', 'parted', '-s', device, 'mkpart', 'primary', part_fs_type, '1MiB', '100%'],
+                    f"Creating {part_fs_type} partition..."
                 ):
                     raise Exception("Failed to create partition")
                 
@@ -586,8 +593,8 @@ class BootableUSBCreator:
                     raise Exception("Failed to format partition")
             elif fs == "NTFS":
                 if not self.run_command(
-                    ['sudo', 'mkfs.ntfs', '-f', '-L', label, partition],
-                    f"Formatting as NTFS..."
+                    ['sudo', 'mkfs.ntfs', '-Q', '-L', label, partition],
+                    f"Formatting as NTFS (quick format)..."
                 ):
                     raise Exception("Failed to format partition")
             elif fs == "exFAT":
@@ -653,24 +660,49 @@ class BootableUSBCreator:
             self.update_progress(90, "Step 6/6: Installing bootloader...")
             self.log("\n[Step 6/6] Installing bootloader...")
             
+            # Check if this is a Windows ISO by looking for bootmgr or bootmgr.efi
+            is_windows_iso = False
+            try:
+                subprocess.run(['sudo', 'mount', partition, usb_mount], 
+                             capture_output=True, check=True)
+                
+                if os.path.exists(os.path.join(usb_mount, 'bootmgr')) or \
+                   os.path.exists(os.path.join(usb_mount, 'sources', 'boot.wim')):
+                    is_windows_iso = True
+                    self.log("Detected Windows ISO")
+            except:
+                pass
+            
             if self.boot_mode.get() == "BIOS":
-                # Install GRUB for Legacy BIOS
+                if is_windows_iso:
+                    # For Windows in Legacy BIOS mode, the bootmgr is already copied
+                    # We just need to ensure the partition is bootable (already set)
+                    self.log("Windows bootloader (bootmgr) already copied from ISO")
+                    self.log("Partition is marked as bootable - Windows should boot in Legacy mode")
+                else:
+                    # Install GRUB for non-Windows ISOs (Linux, etc.)
+                    try:
+                        if not self.run_command(
+                            ['sudo', 'grub-install', '--target=i386-pc', '--boot-directory=' + usb_mount + '/boot', device],
+                            "Installing GRUB bootloader..."
+                        ):
+                            self.log("GRUB installation failed, but ISO may still be bootable", "WARNING")
+                    except Exception as e:
+                        self.log(f"Bootloader installation warning: {e}", "WARNING")
+                
+                # Unmount
                 try:
-                    subprocess.run(['sudo', 'mount', partition, usb_mount], 
-                                 capture_output=True, check=True)
-                    
-                    if not self.run_command(
-                        ['sudo', 'grub-install', '--target=i386-pc', '--boot-directory=' + usb_mount + '/boot', device],
-                        "Installing GRUB bootloader..."
-                    ):
-                        self.log("GRUB installation failed, but ISO may still be bootable", "WARNING")
-                    
                     subprocess.run(['sudo', 'umount', usb_mount], 
                                  capture_output=True, check=False)
-                except Exception as e:
-                    self.log(f"Bootloader installation warning: {e}", "WARNING")
+                except:
+                    pass
             else:
-                self.log("UEFI mode - bootloader installation not required")
+                self.log("UEFI mode - bootloader already present in ISO")
+                try:
+                    subprocess.run(['sudo', 'umount', usb_mount], 
+                                 capture_output=True, check=False)
+                except:
+                    pass
             
             self.update_progress(95, "Step 6/6: Complete")
             
@@ -692,11 +724,15 @@ class BootableUSBCreator:
         
         except Exception as e:
             self.log(f"\nFailed to create bootable USB: {e}", "ERROR")
+            self.log(f"Error type: {type(e).__name__}", "ERROR")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}", "ERROR")
             messagebox.showerror("Error", f"Failed to create bootable USB:\n{e}")
             self.create_btn.config(state='normal')
         
         finally:
             self.is_creating = False
+            self.log("Thread finished", "INFO")
 
 
 def check_dependencies():
